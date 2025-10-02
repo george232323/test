@@ -1,4 +1,3 @@
-import '@/styles/globals.css'
 import { Analytics } from '@vercel/analytics/react'
 import '@/styles/globals.css'
 
