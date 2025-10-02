@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <title>Voting — Compare Products</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>صوت بين منتجين</h1>
+      <p>اختار واحد من المنتجين ثم اضغط Apply — الأرقام تتحسب فورياً.</p>
+    </header>
+
+    <div class="card" role="region" aria-label="Comparison card">
+      <div class="products" id="products">
+        <div id="productA" class="product" tabindex="0" role="button" aria-pressed="false" data-id="productA">
+          <div class="check">✓</div>
+          <img id="imgA" class="prod-img" src="https://flosscap.net/public/storage/product_category/Webp/Orginal/%D8%A8%D9%86-%D8%A7%D8%A8%D9%88-%D8%B9%D9%88%D9%81-%D9%85%D8%AD%D9%88%D8%AC-%D9%81%D8%A7%D8%AA%D8%AD-200-%D8%AC%D9%85354.webp?text=Product+A" alt="صورة المنتج أ">
+          <div class="title" id="titleA">بن ابو عوف</div>
+          <div class="desc" id="descA"> إنها مثالية في الصباح لبدأ يومك بنشاط وحيوية. </div>
+          <div class="progress-wrap" aria-hidden="false">
+            <div class="bar"><div id="fillA" class="bar-fill" style="background:linear-gradient(90deg,#36d1dc,#5b86e5)"></div></div>
+            <div class="meta-row"><div class="pct" id="pctA">0%</div><div class="count" id="countA">0 صوت</div></div>
+          </div>
+        </div>
+
+        <div id="productB" class="product" tabindex="0" role="button" aria-pressed="false" data-id="productB">
+          <div class="check">✓</div>
+          <img id="imgB" class="prod-img" src="https://mcprod.hyperone.com.eg/media/catalog/product/cache/8d4e6327d79fd11192282459179cc69e/6/2/6254000115743dv200g.jpg?text=Product+B" alt="صورة المنتج ب">
+          <div class="title" id="titleB">بن العميد</div>
+          <div class="desc" id="descB">من أجود أنواع حبوب أرابيكا التي تتميز بمذاقها الفريد.</div>
+          <div class="progress-wrap">
+            <div class="bar"><div id="fillB" class="bar-fill" style="background:linear-gradient(90deg,#ff9a9e,#fad0c4)"></div></div>
+            <div class="meta-row"><div class="pct" id="pctB">0%</div><div class="count" id="countB">0 صوت</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="center-area">
+        <button id="applyBtn" class="apply-btn" disabled>Apply</button>
+        <div id="msg" class="msg" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const comparisonId = "compare-1";
+    const productIds = ["productA","productB"];
+    const prodEls = { productA: document.getElementById("productA"), productB: document.getElementById("productB") };
+    const fillA = document.getElementById("fillA"), fillB = document.getElementById("fillB");
+    const pctA = document.getElementById("pctA"), pctB = document.getElementById("pctB");
+    const countA = document.getElementById("countA"), countB = document.getElementById("countB");
+    const applyBtn = document.getElementById("applyBtn");
+    const msgEl = document.getElementById("msg");
+    let selected = null;
+    let totals = { productA:0, productB:0 };
+
+    Object.values(prodEls).forEach(el=>{
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.click(); });
+    });
+    document.addEventListener("keydown", (e) => {
+      if ((e.key === " " || e.key === "Spacebar") && !applyBtn.disabled) {
+        e.preventDefault();
+        applyBtn.click();
+      }
+    });
+
+    productIds.forEach(pid => {
+      prodEls[pid].addEventListener("click", (e) => {
+        console.log("clicked product:", pid);
+        productIds.forEach(p => prodEls[p].classList.remove("selected"));
+        prodEls[pid].classList.add("selected");
+        productIds.forEach(p => prodEls[p].setAttribute("aria-pressed","false"));
+        prodEls[pid].setAttribute("aria-pressed","true");
+
+        selected = pid;
+        applyBtn.disabled = false;
+        applyBtn.style.display = "inline-block";
+        applyBtn.style.opacity = "1";
+        msgEl.textContent = "";
+        applyBtn.focus({ preventScroll: true });
+      });
+    });
+
+    function hasLocalVoted(){
+      try { return JSON.parse(localStorage.getItem("voted_" + comparisonId)); }
+      catch(e){ return null; }
+    }
+    function setLocalVoted(productId){
+      try { localStorage.setItem("voted_" + comparisonId, JSON.stringify({ product: productId, at: Date.now() })); }
+      catch(e){}
+    }
+
+    async function fetchCounts(){
+      try {
+        const r = await fetch(`/api/counts?comparisonId=${encodeURIComponent(comparisonId)}`);
+        if (!r.ok) { console.warn('counts fetch failed', r.status); return; }
+        const data = await r.json();
+        const arr = (data.totals || []).reduce((acc, cur) => { acc[cur.product_id] = cur.votes; return acc; }, {});
+        totals.productA = arr.productA || 0;
+        totals.productB = arr.productB || 0;
+        render();
+      } catch (e) { console.error(e); }
+    }
+
+    function render(){
+      const a = totals.productA || 0;
+      const b = totals.productB || 0;
+      const sum = a + b;
+      const pa = sum === 0 ? 0 : Math.round((a/sum)*100);
+      const pb = sum === 0 ? 0 : 100 - pa;
+      fillA.style.width = pa + "%";
+      fillB.style.width = pb + "%";
+      pctA.textContent = pa + "%";
+      pctB.textContent = pb + "%";
+      countA.textContent = a + " صوت";
+      countB.textContent = b + " صوت";
+      if (pa > pb) { fillA.style.filter = "brightness(1.06)"; fillB.style.filter = "brightness(.94)"; }
+      else if (pb > pa) { fillB.style.filter = "brightness(1.06)"; fillA.style.filter = "brightness(.94)"; }
+      else { fillA.style.filter = fillB.style.filter = "brightness(1)"; }
+    }
+
+    async function submitVote(productId){
+      applyBtn.disabled = true;
+      msgEl.style.color = "";
+      msgEl.textContent = "";
+      const local = hasLocalVoted();
+      if (local) {
+        msgEl.style.color = "var(--danger)";
+        msgEl.textContent = "انت صوتت بالفعل في المقارنة دي.";
+        applyBtn.disabled = false;
+        return;
+      }
+      try {
+        console.log('sending vote for', productId);
+        const resp = await fetch('/api/vote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comparisonId, productId })
+        });
+        const j = await resp.json();
+        if (!resp.ok) {
+          msgEl.style.color = "var(--danger)";
+          msgEl.textContent = j.error || "حدث خطأ";
+        } else {
+          setLocalVoted(productId);
+          msgEl.style.color = "var(--success)";
+          msgEl.textContent = "تم التصويت. شكراً!";
+          if (j.totals) {
+            const arr = j.totals.reduce((acc, cur) => { acc[cur.product_id] = cur.votes; return acc; }, {});
+            totals.productA = arr.productA || totals.productA;
+            totals.productB = arr.productB || totals.productB;
+            render();
+          } else {
+            fetchCounts();
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        msgEl.style.color = "var(--danger)";
+        msgEl.textContent = "حصل خطأ أثناء التصويت";
+      } finally {
+        applyBtn.disabled = false;
+      }
+    }
+
+    applyBtn.addEventListener("click", () => {
+      console.log("apply clicked — selected:", selected, "disabled:", applyBtn.disabled);
+      if (!selected) {
+        msgEl.style.color = "var(--danger)";
+        msgEl.textContent = "اختار منتج الأول";
+        return;
+      }
+      submitVote(selected);
+    });
+
+    (async function init(){
+      await fetchCounts();
+      setInterval(fetchCounts, 3000);
+      const local = hasLocalVoted();
+      if (local){
+        msgEl.style.color = "var(--muted)";
+        msgEl.textContent = "انت صوتت بالفعل: " + local.product;
+      }
+    })();
+  </script>
+</body>
+</html>
