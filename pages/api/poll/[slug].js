@@ -1,5 +1,5 @@
 // pages/api/poll/[slug].js
-import db from "../../_firebase";
+import db from "../_firebase";
 
 export default async function handler(req,res){
   const { slug } = req.query;
