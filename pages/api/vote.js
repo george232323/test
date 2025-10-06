@@ -1,96 +1,48 @@
+// pages/api/vote.js
 import db from "./_firebase";
 import crypto from "crypto";
 
+function ipFromReq(req) {
+  const ipHeader = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+  return Array.isArray(ipHeader) ? ipHeader[0] : String(ipHeader).split(",")[0].trim();
+}
 function hashIp(ip) {
-  return crypto.createHash("sha256").update(String(ip || "")).digest("hex");
+  return crypto.createHash("sha256").update(String(ip||"")).digest("hex");
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-  const { comparisonId, productId, userId } = req.body || {};
-  if (!comparisonId || !productId) return res.status(400).json({ error: "Missing comparisonId or productId" });
+  const { pollId, productId } = req.body || {};
+  if (!pollId || !productId) return res.status(400).json({ ok: false, error: "Missing fields" });
 
-  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+  const ip = ipFromReq(req);
   const ipHash = hashIp(ip);
+  const votersRef = db.collection("polls").doc(pollId).collection("voters").doc(ipHash);
+  const pollRef = db.collection("polls").doc(pollId);
 
   try {
-    // Read everything first (no writes before all reads)
-    const prodRef = db.collection("comparisons").doc(comparisonId).collection("products").doc(productId);
-    const ipLogRef = db.collection("comparisons").doc(comparisonId).collection("ipLogs").doc(ipHash);
-    const userVoteRef = userId ? db.collection("comparisons").doc(comparisonId).collection("userVotes").doc(userId) : null;
-
-    const readResult = await db.runTransaction(async (t) => {
-      const [prodSnap, ipSnap, userSnap] = await Promise.all([
-        t.get(prodRef),
-        t.get(ipLogRef),
-        userVoteRef ? t.get(userVoteRef) : Promise.resolve(null)
-      ]);
-
-      // checks based on reads
-      if (userSnap && userSnap.exists) {
-        throw { code: "USER_ALREADY_VOTED", message: "User already voted in this comparison" };
+    const result = await db.runTransaction(async (t) => {
+      const voterDoc = await t.get(votersRef);
+      if (voterDoc.exists) {
+        return { ok: false, already: true };
       }
+      const pollSnap = await t.get(pollRef);
+      if (!pollSnap.exists) throw new Error("Poll not found");
+      const poll = pollSnap.data();
+      const totals = poll.totals || {};
+      totals[productId] = (totals[productId] || 0) + 1;
 
-      const now = Date.now();
-      const oneHourAgo = now - 60 * 60 * 1000;
-      const ipRecent = (ipSnap && ipSnap.exists && ipSnap.data().recent) ? ipSnap.data().recent.filter(ts => ts > oneHourAgo) : [];
+      t.set(votersRef, { seenAt: Date.now(), productId }, { merge: true });
+      t.set(pollRef, { totals, updatedAt: Date.now() }, { merge: true });
 
-      if (ipRecent.length >= 3) {
-        throw { code: "IP_RATE_LIMIT", message: "Too many votes from this IP (hourly)" };
-      }
-
-      // prepare writes (do all writes AFTER reads)
-      // update product count
-      const currentVotes = prodSnap && prodSnap.exists ? (prodSnap.data().votes || 0) : 0;
-
-      // new ipRecent array to store
-      const newIpRecent = ipRecent.concat([now]);
-
-      // queue writes
-      if (!prodSnap.exists) {
-        t.set(prodRef, { votes: 1 }, { merge: true });
-      } else {
-        t.update(prodRef, { votes: currentVotes + 1 });
-      }
-
-      t.set(ipLogRef, { recent: newIpRecent }, { merge: true });
-
-      t.set(db.collection("comparisons").doc(comparisonId).collection("votes").doc(), {
-        productId,
-        ipHash,
-        userId: userId || null,
-        createdAt: now
-      });
-
-      if (userVoteRef) {
-        t.set(userVoteRef, { productId, votedAt: now, ipHash }, { merge: true });
-      }
-
-      return { newVotes: currentVotes + 1 };
+      return { ok: true, totals };
     });
 
-    // After transaction, fetch totals to return (or you can incrementally compute)
-    const totalsSnap = await db.collection("comparisons").doc(comparisonId).collection("products").get();
-    const totals = [];
-    totalsSnap.forEach(d => totals.push({ product_id: d.id, votes: d.data().votes || 0 }));
-
-    return res.status(200).json({ ok: true, totals });
-
+    if (!result.ok) return res.status(200).json({ ok: false, already: true, message: "You already voted" });
+    return res.status(200).json({ ok: true, totals: result.totals || {} });
   } catch (err) {
-    // handle our thrown objects
-    if (err && err.code === "USER_ALREADY_VOTED") {
-      console.warn("vote denied:", err.message);
-      return res.status(409).json({ error: err.message });
-    }
-    if (err && err.code === "IP_RATE_LIMIT") {
-      console.warn("rate limit:", err.message);
-      return res.status(429).json({ error: err.message });
-    }
-
-    // Firestore transaction / permission / env errors
-    console.error("vote error:", err && err.message ? err.message : err);
-    // expose a safe message
-    return res.status(500).json({ error: "Server error during voting" });
+    console.error("vote error:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 }
